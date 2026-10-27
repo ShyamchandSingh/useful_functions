@@ -10,6 +10,9 @@ Run directly to:
   Required CSV columns : pnl, exit_date
   Optional CSV columns : exit_time, gross_pnl, charges
 
+When a CSV is scored, the full output row is also saved to we_report.csv
+in the current working directory (one row, spec §8 column order).
+
 All constants are fixed anchors — DO NOT tune to any strategy.
 Changing them requires a version bump of the spec.
 """
@@ -156,6 +159,48 @@ def compute_we(
     rows = _normalize_trades(trades)
     N = len(rows)
     pnl = [r["pnl"] for r in rows]
+
+    # ---- Empty-input short-circuit (§12 item 4) ----------------------------
+    # An empty trade list must yield all-zero metrics, including WE = 0.
+    # Without this, Expectancy_Score defaults to 50 ("break-even") and
+    # Streak_Score defaults to 100 ("no losing runs"), giving WE = 35.
+    if N == 0:
+        return {
+            "Dataset":                                        label,
+            "Period start":                                   None,
+            "Period end":                                     None,
+            "Completed trades":                               0,
+            "Winning trades":                                 0,
+            "Losing trades":                                  0,
+            "Success percentage of signal (%)":               0.0,
+            "Failure percentage (%)":                         0.0,
+            "Gross derivative P&L proxy (INR)":               0.0,
+            "Charges (INR)":                                  0.0,
+            "Net P&L after charges (INR)":                    0.0,
+            "Reference invested capital (INR)":               round(start_capital, 2),
+            "Overall increase/decrease in reference capital (%)": 0.0,
+            "Ending reference capital (INR)":                 round(start_capital, 2),
+            "Average monthly net P&L (INR)":                  0.0,
+            "Maximum realized drawdown (%)":                  0.0,
+            "Average winning trade (INR)":                    0.0,
+            "Average losing trade absolute (INR)":            0.0,
+            "Payoff ratio (RR)":                              "N/A",
+            "Expectancy (R per trade)":                       0.0,
+            "Max losing streak":                              0,
+            "Avg losing streak":                              0.0,
+            "Excess losing streak":                           0.0,
+            "Monthly stability score (/100)":                 0.0,
+            "Weekly stability score (/100)":                  0.0,
+            "Expectancy score (/100)":                        0.0,
+            "Payoff ratio score (/100)":                      0.0,
+            "Loss-streak score (/100)":                       0.0,
+            "Return score (/100)":                            0.0,
+            "Stability score (/100)":                         0.0,
+            "Weighted efficiency score (/100)":               0.0,
+            "_edge_case":                                     "empty trade list",
+            "_num_monthly_buckets":                           0,
+            "_num_weekly_buckets":                            0,
+        }
 
     # ---- Step 1: raw metrics ------------------------------------------------
     W = sum(1 for p in pnl if p > 0)
@@ -311,7 +356,7 @@ def compute_we_from_csv(
     trades = []
     with open(csv_path, newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
-            trades.append({k: v for k, v in row.items() if v not in (None, "")})
+            trades.append({k: v for k, v in row.items() if k not in (None, "")})
     return compute_we(
         trades,
         label=label or csv_path.rsplit("/", 1)[-1],
@@ -331,6 +376,24 @@ def compute_we_from_dataframe(
         label=label,
         start_capital=start_capital,
     )
+
+
+# ---------------------------------------------------------------------------
+# Save helper — write the scored row to CSV
+# ---------------------------------------------------------------------------
+def save_we_report(result: dict, out_path: str = "we_report.csv") -> str:
+    """
+    Write the scored output row to `out_path` as a single-row CSV.
+
+    Column order follows spec §8. Private diagnostics (keys starting with
+    '_') are excluded. Existing files are overwritten.
+    """
+    row = {k: v for k, v in result.items() if not k.startswith("_")}
+    with open(out_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+        writer.writeheader()
+        writer.writerow(row)
+    return out_path
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +494,10 @@ if __name__ == "__main__":
         print(f"\nDiagnostics: edge_case={result['_edge_case']}, "
               f"monthly_buckets={result['_num_monthly_buckets']}, "
               f"weekly_buckets={result['_num_weekly_buckets']}")
+
+        # ---- Save the report -------------------------------------------------
+        saved = save_we_report(result, "we_report.csv")
+        print(f"\nReport saved to: {saved}")
     else:
         # No file given — show a tiny demo on an in-memory list.
         demo = [
